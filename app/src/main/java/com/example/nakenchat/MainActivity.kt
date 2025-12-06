@@ -15,11 +15,15 @@ import java.io.PrintWriter
 import java.net.Socket
 import kotlin.concurrent.thread
 import kotlin.system.exitProcess
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
+import javax.net.ssl.*
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var socket: Socket
     private lateinit var writer: PrintWriter
+
     private lateinit var reader: BufferedReader
 
     private lateinit var recyclerViewMessages: RecyclerView
@@ -33,6 +37,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var serverIP: String
     private var serverPORT: Int = 6666
 
+    private var useSSL: Boolean = false
+
     private lateinit var buttonW: Button
     private lateinit var buttonE: Button
     private lateinit var buttonT: Button
@@ -43,6 +49,20 @@ class MainActivity : AppCompatActivity() {
     @Volatile
     private var isRunning = true
 
+    fun createTrustAllSSLSocketFactory(): SSLSocketFactory {
+        val trustAllCerts = arrayOf<TrustManager>(
+            object : X509TrustManager {
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+            }
+        )
+
+        val sslContext = SSLContext.getInstance("TLS")
+        sslContext.init(null, trustAllCerts, SecureRandom())
+        return sslContext.socketFactory
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -51,7 +71,8 @@ class MainActivity : AppCompatActivity() {
         username = intent.getStringExtra("USERNAME") ?: ""
         password = intent.getStringExtra("PASSWORD") ?: ""
         serverIP = intent.getStringExtra("SERVER") ?: "10.0.2.2"
-        serverPORT = intent.getIntExtra("PORT", 6666)
+        serverPORT = intent.getIntExtra("PORT", 6667)
+        useSSL = intent.getBooleanExtra("SSL", false)
 
         recyclerViewMessages = findViewById(R.id.recyclerViewMessages)
         editTextMessage = findViewById(R.id.editTextMessage)
@@ -119,7 +140,21 @@ class MainActivity : AppCompatActivity() {
     private fun connectToServer() {
         thread {
             try {
-                socket = Socket(serverIP, serverPORT)
+                runOnUiThread {
+                    if (useSSL) {
+                        Toast.makeText(this, "Connecting with SSL", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this, "Connecting without SSL", Toast.LENGTH_SHORT).show()
+                    }
+                }
+
+                socket = if (useSSL) {
+                    val factory = createTrustAllSSLSocketFactory()
+                    factory.createSocket(serverIP, serverPORT) as SSLSocket
+                } else {
+                    Socket(serverIP, serverPORT)
+                }
+
                 writer = PrintWriter(socket.getOutputStream(), true)
                 reader = BufferedReader(InputStreamReader(socket.getInputStream()))
 
@@ -131,7 +166,12 @@ class MainActivity : AppCompatActivity() {
 
                 writer.println(initialMessage)
 
-                val helloMessage = "% used an Android device to come here!!"
+                val helloMessage = if (useSSL) {
+                    "% used an Android device to come here (SSL)!!"
+                } else {
+                    "% used an Android device to come here!!"
+                }
+
                 writer.println(helloMessage)
 
                 runOnUiThread {
@@ -151,7 +191,8 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 e.printStackTrace()
                 runOnUiThread {
-                    Toast.makeText(this, "Connection failed: ${e.message}", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "Connection failed: ${e.message}", Toast.LENGTH_LONG)
+                        .show()
                 }
             }
         }

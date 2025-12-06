@@ -6,12 +6,13 @@
     <string name="server_hint">Server</string>
     <string name="port_hint">Port</string>
     <string name="default_server">76.235.94.33</string>
-    <string name="default_port">6666</string>
+    <string name="default_port">6667</string>
+    <string name="switch_ssl_label">Use SSL</string>
     <string name="connect_button">Connect</string>
     <string name="exit_button">Exit</string>
 
     <string name="send_button">Send</string>
-    <string name="message_hint">Type message...</string>
+    <string name="message_hint">Type message…</string>
     <string name="button_w">w</string>
     <string name="button_e">e</string>
     <string name="button_t">t</string>

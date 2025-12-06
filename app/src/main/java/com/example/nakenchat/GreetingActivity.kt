@@ -5,6 +5,7 @@ import android.widget.Button
 import android.widget.EditText
 import androidx.appcompat.app.AppCompatActivity
 import kotlin.system.exitProcess
+import com.google.android.material.switchmaterial.SwitchMaterial
 
 class GreetingActivity : AppCompatActivity() {
 
@@ -16,6 +17,7 @@ class GreetingActivity : AppCompatActivity() {
         val editPassword = findViewById<EditText>(R.id.editTextPassword)
         val editServer = findViewById<EditText>(R.id.editTextServer)
         val editPort = findViewById<EditText>(R.id.editTextPort)
+        val switchUseSSL = findViewById<SwitchMaterial>(R.id.switchUseSSL)
         val buttonConnect = findViewById<Button>(R.id.buttonConnect)
         val buttonExit = findViewById<Button>(R.id.buttonExit)
 
@@ -23,13 +25,15 @@ class GreetingActivity : AppCompatActivity() {
             val username = editUsername.text.toString()
             val password = editPassword.text.toString()
             val server = editServer.text.toString()
-            val port = editPort.text.toString().toIntOrNull() ?: 6666
+            val port = editPort.text.toString().toIntOrNull() ?: 6667
+            val ssl = switchUseSSL.isChecked
 
             val intent = Intent(this, MainActivity::class.java).apply {
                 putExtra("USERNAME", username)
                 putExtra("PASSWORD", password)
                 putExtra("SERVER", server)
                 putExtra("PORT", port)
+                putExtra("SSL", ssl)
             }
             startActivity(intent)
         }
