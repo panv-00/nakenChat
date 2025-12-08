@@ -1,43 +1,36 @@
 package com.example.nakenchat
 
+import android.Manifest
+import android.content.BroadcastReceiver
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.ServiceConnection
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.localbroadcastmanager.content.LocalBroadcastManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.PrintWriter
-import java.net.Socket
 import kotlin.concurrent.thread
 import kotlin.system.exitProcess
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
-import javax.net.ssl.*
 
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var socket: Socket
-    private lateinit var writer: PrintWriter
-
-    private lateinit var reader: BufferedReader
-
     private lateinit var recyclerViewMessages: RecyclerView
     private lateinit var editTextMessage: EditText
-
     private val messages = mutableListOf<Message>()
     private lateinit var messageAdapter: MessageAdapter
-
-    private lateinit var username: String
-    private lateinit var password: String
-    private lateinit var serverIP: String
-    private var serverPORT: Int = 6666
-
-    private var useSSL: Boolean = false
 
     private lateinit var buttonW: Button
     private lateinit var buttonE: Button
@@ -46,21 +39,35 @@ class MainActivity : AppCompatActivity() {
     private lateinit var buttonPercent: Button
     private lateinit var buttonQ: Button
 
-    @Volatile
-    private var isRunning = true
+    private var chatService: ChatService? = null
+    private var isBound = false
+    private lateinit var username: String
 
-    fun createTrustAllSSLSocketFactory(): SSLSocketFactory {
-        val trustAllCerts = arrayOf<TrustManager>(
-            object : X509TrustManager {
-                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
-                override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
-                override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
+    private val POST_NOTIFICATION_REQUEST_CODE = 1001
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            val binder = service as ChatService.ChatBinder
+            chatService = binder.getService()
+            isBound = true
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            chatService = null
+            isBound = false
+        }
+    }
+
+    private val messageReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val rawMessage = intent?.getStringExtra("message")
+            if (rawMessage != null) {
+                val message = Message.parseRawMessage(rawMessage, username)
+                messages.add(message)
+                messageAdapter.notifyItemInserted(messages.size - 1)
+                recyclerViewMessages.scrollToPosition(messages.size - 1)
             }
-        )
-
-        val sslContext = SSLContext.getInstance("TLS")
-        sslContext.init(null, trustAllCerts, SecureRandom())
-        return sslContext.socketFactory
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -69,10 +76,16 @@ class MainActivity : AppCompatActivity() {
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         username = intent.getStringExtra("USERNAME") ?: ""
-        password = intent.getStringExtra("PASSWORD") ?: ""
-        serverIP = intent.getStringExtra("SERVER") ?: "10.0.2.2"
-        serverPORT = intent.getIntExtra("PORT", 6667)
-        useSSL = intent.getBooleanExtra("SSL", false)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), POST_NOTIFICATION_REQUEST_CODE)
+            } else {
+                startAndBindChatService()
+            }
+        } else {
+            startAndBindChatService()
+        }
 
         recyclerViewMessages = findViewById(R.id.recyclerViewMessages)
         editTextMessage = findViewById(R.id.editTextMessage)
@@ -101,30 +114,19 @@ class MainActivity : AppCompatActivity() {
         buttonPercent = findViewById(R.id.buttonPercent)
         buttonQ = findViewById(R.id.buttonQ)
 
-        buttonW.setOnClickListener {
-            sendMessage(".w")
-        }
-        buttonE.setOnClickListener {
-            sendMessage(".e")
-        }
-        buttonT.setOnClickListener {
-            sendMessage(".t")
-        }
+        buttonW.setOnClickListener { sendMessage(".w") }
+        buttonE.setOnClickListener { sendMessage(".e") }
+        buttonT.setOnClickListener { sendMessage(".t") }
         buttonPrivate.setOnClickListener {
-            runOnUiThread {
-                editTextMessage.setText(".p")
-                editTextMessage.setSelection(editTextMessage.text.length)
-            }
+            editTextMessage.setText(".p ")
+            editTextMessage.setSelection(editTextMessage.text.length)
         }
         buttonPercent.setOnClickListener {
-            runOnUiThread {
-                editTextMessage.setText("%")
-                editTextMessage.setSelection(editTextMessage.text.length)
-            }
+            editTextMessage.setText("% ")
+            editTextMessage.setSelection(editTextMessage.text.length)
         }
         buttonQ.setOnClickListener {
             sendMessage(".q")
-            // Delay 2 seconds then finish the app
             thread {
                 Thread.sleep(2000)
                 runOnUiThread {
@@ -134,99 +136,50 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        connectToServer()
+        LocalBroadcastManager.getInstance(this).registerReceiver(messageReceiver, IntentFilter("NewMessage"))
     }
 
-    private fun connectToServer() {
-        thread {
-            try {
-                runOnUiThread {
-                    if (useSSL) {
-                        Toast.makeText(this, "Connecting with SSL", Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(this, "Connecting without SSL", Toast.LENGTH_SHORT).show()
-                    }
-                }
+    private fun startAndBindChatService() {
+        val password = intent.getStringExtra("PASSWORD") ?: ""
+        val serverIP = intent.getStringExtra("SERVER") ?: "10.0.2.2"
+        val serverPORT = intent.getIntExtra("PORT", 6667)
+        val useSSL = intent.getBooleanExtra("SSL", false)
 
-                socket = if (useSSL) {
-                    val factory = createTrustAllSSLSocketFactory()
-                    factory.createSocket(serverIP, serverPORT) as SSLSocket
-                } else {
-                    Socket(serverIP, serverPORT)
-                }
+        val serviceIntent = Intent(this, ChatService::class.java).apply {
+            putExtra("USERNAME", username)
+            putExtra("PASSWORD", password)
+            putExtra("SERVER", serverIP)
+            putExtra("PORT", serverPORT)
+            putExtra("SSL", useSSL)
+        }
+        startService(serviceIntent)
+        bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
+    }
 
-                writer = PrintWriter(socket.getOutputStream(), true)
-                reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-
-                val initialMessage = if (password.isNotEmpty()) {
-                    ".n $username=$password"
-                } else {
-                    ".n $username"
-                }
-
-                writer.println(initialMessage)
-
-                val helloMessage = if (useSSL) {
-                    "% used an Android device to come here (SSL)!!"
-                } else {
-                    "% used an Android device to come here!!"
-                }
-
-                writer.println(helloMessage)
-
-                runOnUiThread {
-                    Toast.makeText(this, "Connected to server", Toast.LENGTH_SHORT).show()
-                }
-
-                while (isRunning) {
-                    val line = reader.readLine() ?: break
-                    val message = Message.parseRawMessage(line, username)
-                    runOnUiThread {
-                        messages.add(message)
-                        messageAdapter.notifyItemInserted(messages.size - 1)
-                        recyclerViewMessages.scrollToPosition(messages.size - 1)
-                    }
-                }
-
-            } catch (e: Exception) {
-                e.printStackTrace()
-                runOnUiThread {
-                    Toast.makeText(this, "Connection failed: ${e.message}", Toast.LENGTH_LONG)
-                        .show()
-                }
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == POST_NOTIFICATION_REQUEST_CODE) {
+            if ((grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
+                startAndBindChatService()
+            } else {
+                Toast.makeText(this, "Notification permission is required for the chat to stay connected.", Toast.LENGTH_LONG).show()
+                finish()
             }
         }
     }
 
     private fun sendMessage(message: String) {
-        thread {
-            if (::writer.isInitialized) {
-                writer.println(message)
-                writer.flush()
-            }
+        if (isBound) {
+            chatService?.sendMessage(message)
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        thread {
-            try {
-                if (::writer.isInitialized) {
-                    writer.println(".q")
-                    writer.flush()
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-
-            try {
-                isRunning = false
-                if (::socket.isInitialized && !socket.isClosed) {
-                    socket.close()
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+        if (isBound) {
+            unbindService(serviceConnection)
+            isBound = false
         }
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(messageReceiver)
     }
 }

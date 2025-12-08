@@ -1,15 +1,5 @@
 package com.example.nakenchat
 
-enum class MessageType {
-    NONE,
-    SYSTEM,
-    EMOTE,
-    SENT,
-    RECEIVED,
-    PRIVATE_OUT,
-    PRIVATE_IN
-}
-
 data class Message(
     val text: String,
     val from: String = "",
@@ -86,7 +76,7 @@ data class Message(
                     if (senderIdStart >= 0 && senderIdEnd > senderIdStart) {
                         val fromId = privatePart.substring(senderIdStart + 1, senderIdEnd).toIntOrNull() ?: -1
                         val afterSenderId = privatePart.substring(senderIdEnd + 1).trim()
-                        // name is before "(private):"
+                        // name is before \"(private):\"
                         val privateIndex = afterSenderId.indexOf("(private):")
                         if (privateIndex > 0) {
                             val fromName = afterSenderId.substring(0, privateIndex).trim()
